@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>弹跳小球点名器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: Arial, sans-serif;
+        }
+        #canvas {
+            display: block;
+            background-color: #1a1a1a;
+        }
+        .control-panel {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            background: rgba(255,255,255,0.9);
+            padding: 15px 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.3);
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .control-panel input, .control-panel button {
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .control-panel button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .control-panel button:hover {
+            background: #45a049;
+        }
+        .control-panel button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #nameInput {
+            width: 200px;
+        }
+        .result-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            z-index: 200;
+            background: white;
+            padding: 40px 60px;
+            border-radius: 15px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+        .result-modal.active {
+            transform: translate(-50%, -50%) scale(1);
+        }
+        .result-modal h2 {
+            font-size: 48px;
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 150;
+            display: none;
+        }
+        .overlay.active {
+            display: block;
+        }
+        /* 圆形动画容器 */
+        .roll-animation {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 180;
+            background: rgba(0,0,0,0.85);
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+        .roll-animation.active {
+            display: flex;
+        }
+        .circle-container {
+            width: 500px;
+            height: 500px;
+            border: 8px solid #4CAF50;
+            border-radius: 50%;
+            position: relative;
+            overflow: hidden;
+            background: #0a0a0a;
+        }
+        /* 圆形内特效小球 */
+        .circle-ball {
+            position: absolute;
+            border-radius: 50%;
+            opacity: 0.8;
+            pointer-events: none;
+        }
+        /* 尾字小球（带弹跳效果） */
+        .char-ball {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #333;
+            color: #fff;
+            font-size: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            transition: all 0.2s ease;
+            opacity: 0.6;
+        }
+        .char-ball.active {
+            background: #4CAF50;
+            box-shadow: 0 0 15px #4CAF50, 0 0 30px #4CAF50;
+            opacity: 1;
+            transform: scale(1.2);
+        }
+        .char-ball.final {
+            background: #ffeb3b;
+            box-shadow: 0 0 15px #ffeb3b, 0 0 30px #ffeb3b;
+            transform: scale(1.5);
+        }
+        #resetBtn {
+            background: #ff9800;
+        }
+        #resetBtn:hover {
+            background: #f57c00;
+        }
+        .list-tip {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #fff;
+            font-size: 14px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+    <div class="control-panel">
+        <input type="file" id="fileInput" accept=".txt,.csv,.xlsx,.xls">
+        <input type="text" id="nameInput" placeholder="手动输入姓名（回车添加）">
+        <button id="rollBtn">开始点名</button>
+        <button id="clearBtn">清空名单</button>
+        <button id="resetBtn">重置已点名</button>
+    </div>
+
+    <div class="roll-animation" id="rollAnimation">
+        <div class="circle-container" id="circleContainer"></div>
+    </div>
+
+    <div class="overlay" id="overlay"></div>
+    <div class="result-modal" id="resultModal">
+        <h2 id="resultName"></h2>
+        <button id="closeModalBtn">确定</button>
+    </div>
+
+    <div class="list-tip">
+        总人数：<span id="totalCount">0</span> | 
+        未点名：<span id="unrollCount">0</span> | 
+        已点名：<span id="rolledCount">0</span>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <script>
+        // 背景小球
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let width = window.innerWidth;
+        let height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+
+        class BgBall {
+            constructor() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.r = Math.random() * 15 + 5;
+                this.sx = (Math.random() - 0.5) * 4;
+                this.sy = (Math.random() - 0.5) * 4;
+                this.color = `rgb(${Math.floor(Math.random()*255)},${Math.floor(Math.random()*255)},${Math.floor(Math.random()*255)})`;
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r, 0, Math.PI*2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+            update() {
+                if (this.x + this.r > width || this.x - this.r < 0) this.sx = -this.sx;
+                if (this.y + this.r > height || this.y - this.r < 0) this.sy = -this.sy;
+                this.x += this.sx;
+                this.y += this.sy;
+            }
+        }
+
+        let bgBalls = [];
+        function initBgBalls() {
+            bgBalls = [];
+            for (let i=0; i<80; i++) bgBalls.push(new BgBall());
+        }
+        function animateBg() {
+            requestAnimationFrame(animateBg);
+            ctx.clearRect(0,0,width,height);
+            bgBalls.forEach(b => { b.update(); b.draw(); });
+        }
+
+        // 圆形内特效小球
+        class CircleBall {
+            constructor(container) {
+                this.container = container;
+                this.containerR = 250; 
+                this.r = Math.random() * 12 + 5;
+                this.color = `rgb(${Math.floor(Math.random()*255)},${Math.floor(Math.random()*255)},${Math.floor(Math.random()*255)})`;
+                const angle = Math.random() * Math.PI * 2;
+                const posR = Math.random() * (this.containerR - this.r);
+                this.x = this.containerR + posR * Math.cos(angle);
+                this.y = this.containerR + posR * Math.sin(angle);
+                this.sx = (Math.random() - 0.5) * 4;
+                this.sy = (Math.random() - 0.5) * 4;
+                if (Math.abs(this.sx) < 1) this.sx = this.sx > 0 ? 1 : -1;
+                if (Math.abs(this.sy) < 1) this.sy = this.sy > 0 ? 1 : -1;
+
+                this.el = document.createElement('div');
+                this.el.className = 'circle-ball';
+                this.el.style.width = this.el.style.height = `${this.r*2}px`;
+                this.el.style.backgroundColor = this.color;
+                this.el.style.left = `${this.x - this.r}px`;
+                this.el.style.top = `${this.y - this.r}px`;
+                container.appendChild(this.el);
+            }
+            update() {
+                const distToCenter = Math.sqrt(
+                    Math.pow(this.x - this.containerR, 2) + 
+                    Math.pow(this.y - this.containerR, 2)
+                );
+                if (distToCenter + this.r > this.containerR) {
+                    const nx = (this.x - this.containerR) / distToCenter;
+                    const ny = (this.y - this.containerR) / distToCenter;
+                    const dot = this.sx * nx + this.sy * ny;
+                    this.sx = this.sx - 2 * dot * nx;
+                    this.sy = this.sy - 2 * dot * ny;
+                    this.x = this.containerR + (this.containerR - this.r) * nx;
+                    this.y = this.containerR + (this.containerR - this.r) * ny;
+                }
+                this.x += this.sx;
+                this.y += this.sy;
+                this.el.style.left = `${this.x - this.r}px`;
+                this.el.style.top = `${this.y - this.r}px`;
+            }
+        }
+
+        // 尾字小球（核心：添加弹跳逻辑）
+        class CharBall {
+            constructor(container, name) {
+                this.container = container;
+                this.containerR = 250;
+                this.name = name;
+                this.char = name.trim().slice(-1);
+                this.r = 20; // 40px直径
+                // 随机初始位置
+                const angle = Math.random() * Math.PI * 2;
+                const posR = Math.random() * (this.containerR - this.r - 20);
+                this.x = this.containerR + posR * Math.cos(angle);
+                this.y = this.containerR + posR * Math.sin(angle);
+                // 随机弹跳速度（强制不为0）
+                this.sx = (Math.random() - 0.5) * 8;
+                this.sy = (Math.random() - 0.5) * 8;
+                if (Math.abs(this.sx) < 0.8) this.sx = this.sx > 0 ? 0.8 : -0.8;
+                if (Math.abs(this.sy) < 0.8) this.sy = this.sy > 0 ? 0.8 : -0.8;
+                // 创建DOM
+                this.el = document.createElement('div');
+                this.el.className = 'char-ball';
+                this.el.textContent = this.char;
+                this.el.style.left = `${this.x - this.r}px`;
+                this.el.style.top = `${this.y - this.r}px`;
+                container.appendChild(this.el);
+                // 状态标记
+                this.isActive = false;
+                this.isFinal = false;
+            }
+            // 尾字小球弹跳更新
+            update() {
+                // 圆形边界反弹
+                const distToCenter = Math.sqrt(
+                    Math.pow(this.x - this.containerR, 2) + 
+                    Math.pow(this.y - this.containerR, 2)
+                );
+                if (distToCenter + this.r > this.containerR) {
+                    const nx = (this.x - this.containerR) / distToCenter;
+                    const ny = (this.y - this.containerR) / distToCenter;
+                    const dot = this.sx * nx + this.sy * ny;
+                    this.sx = this.sx - 2 * dot * nx;
+                    this.sy = this.sy - 2 * dot * ny;
+                    this.x = this.containerR + (this.containerR - this.r - 5) * nx;
+                    this.y = this.containerR + (this.containerR - this.r - 5) * ny;
+                }
+                // 更新位置
+                this.x += this.sx;
+                this.y += this.sy;
+                this.el.style.left = `${this.x - this.r}px`;
+                this.el.style.top = `${this.y - this.r}px`;
+            }
+            // 点亮状态
+            activate() {
+                this.isActive = true;
+                this.el.classList.add('active');
+            }
+            // 最终选中状态
+            finalize() {
+                this.isFinal = true;
+                this.el.classList.add('final');
+                // 最终小球减速，突出显示
+                this.sx *= 0.2;
+                this.sy *= 0.2;
+            }
+        }
+
+        // 点名核心逻辑
+        let nameList = [], rolledNames = [];
+        const [fileInput, nameInput, rollBtn, clearBtn, resetBtn] = [
+            document.getElementById('fileInput'),
+            document.getElementById('nameInput'),
+            document.getElementById('rollBtn'),
+            document.getElementById('clearBtn'),
+            document.getElementById('resetBtn')
+        ];
+        const [resultModal, resultName, overlay, closeModalBtn] = [
+            document.getElementById('resultModal'),
+            document.getElementById('resultName'),
+            document.getElementById('overlay'),
+            document.getElementById('closeModalBtn')
+        ];
+        const [totalCount, unrollCount, rolledCount] = [
+            document.getElementById('totalCount'),
+            document.getElementById('unrollCount'),
+            document.getElementById('rolledCount')
+        ];
+        const [rollAnimation, circleContainer] = [
+            document.getElementById('rollAnimation'),
+            document.getElementById('circleContainer')
+        ];
+
+        function updateStats() {
+            totalCount.textContent = nameList.length;
+            unrollCount.textContent = nameList.length - rolledNames.length;
+            rolledCount.textContent = rolledNames.length;
+            rollBtn.disabled = nameList.length === 0 || nameList.length === rolledNames.length;
+        }
+
+        // 动画对象管理
+        let circleBalls = [], charBallList = [];
+        // 圆形区域总动画循环
+        function animateCircleAll() {
+            circleBalls.forEach(b => b.update());
+            charBallList.forEach(b => b.update());
+            requestAnimationFrame(animateCircleAll);
+        }
+
+        // 初始化所有小球
+        function initAllBalls(unrolled) {
+            // 清空旧元素
+            circleContainer.innerHTML = '';
+            circleBalls = [];
+            charBallList = [];
+
+            // 生成特效小球
+            for (let i=0; i<20; i++) {
+                circleBalls.push(new CircleBall(circleContainer));
+            }
+            // 生成尾字小球（带弹跳）
+            unrolled.forEach(name => {
+                charBallList.push(new CharBall(circleContainer, name));
+            });
+            // 启动动画
+            animateCircleAll();
+        }
+
+        // 点名动画
+        function startRoll() {
+            const unrolled = nameList.filter(n => !rolledNames.includes(n));
+            if (unrolled.length === 0) return;
+
+            rollAnimation.classList.add('active');
+            // 初始化带弹跳的尾字小球
+            initAllBalls(unrolled);
+
+            // 随机打乱尾字小球顺序
+            const shuffledChars = [...charBallList].sort(() => Math.random() - 0.5);
+            let index = 0;
+
+            // 逐个点亮
+            const lightTimer = setInterval(() => {
+                if (index < shuffledChars.length - 1) {
+                    shuffledChars[index].activate();
+                    index++;
+                } else {
+                    clearInterval(lightTimer);
+                    // 最后一个设为最终状态
+                    const finalBall = shuffledChars[shuffledChars.length - 1];
+                    setTimeout(() => {
+                        finalBall.finalize();
+                        // 显示结果
+                        setTimeout(() => {
+                            const finalName = finalBall.name;
+                            rolledNames.push(finalName);
+                            resultName.textContent = finalName;
+                            rollAnimation.classList.remove('active');
+                            overlay.classList.add('active');
+                            resultModal.classList.add('active');
+                            updateStats();
+                        }, 800);
+                    }, 200);
+                }
+            }, 100);
+        }
+
+        // 文件解析
+        function parseFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                const ext = file.name.split('.').pop().toLowerCase();
+                if (ext === 'txt') {
+                    reader.readAsText(file, 'utf-8');
+                    reader.onload = e => resolve(e.target.result.split('\n').map(n => n.trim()).filter(n => n));
+                } else if (ext === 'csv') {
+                    reader.readAsText(file, 'utf-8');
+                    reader.onload = e => resolve(e.target.result.split('\n').filter(l => l.trim()).map(l => l.split(',')[0].trim()).filter(n => n));
+                } else if (ext === 'xlsx' || ext === 'xls') {
+                    reader.readAsArrayBuffer(file);
+                    reader.onload = e => {
+                        const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+                        resolve(data.map(row => row[0]?.toString().trim()).filter(n => n));
+                    };
+                } else reject('不支持的格式');
+                reader.onerror = () => reject('读取失败');
+            });
+        }
+
+        // 事件绑定
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                const names = await parseFile(file);
+                const newNames = names.filter(n => !nameList.includes(n));
+                nameList = [...nameList, ...newNames];
+                updateStats();
+                alert(`成功导入 ${newNames.length} 个姓名`);
+            } catch (err) { alert(err); }
+        });
+
+        nameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const name = nameInput.value.trim();
+                if (name && !nameList.includes(name)) {
+                    nameList.push(name);
+                    updateStats();
+                    nameInput.value = '';
+                } else if (nameList.includes(name)) alert('姓名已存在');
+            }
+        });
+
+        rollBtn.addEventListener('click', startRoll);
+        closeModalBtn.addEventListener('click', () => {
+            overlay.classList.remove('active');
+            resultModal.classList.remove('active');
+        });
+        clearBtn.addEventListener('click', () => {
+            nameList = [];
+            rolledNames = [];
+            updateStats();
+            alert('名单已清空');
+        });
+        resetBtn.addEventListener('click', () => {
+            rolledNames = [];
+            updateStats();
+            alert('点名记录已重置');
+        });
+
+        window.addEventListener('resize', () => {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+            initBgBalls();
+        });
+
+        // 初始化
+        initBgBalls();
+        animateBg();
+        updateStats();
+    </script>
+</body>
+</html>
